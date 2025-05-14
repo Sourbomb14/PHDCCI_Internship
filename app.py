@@ -164,6 +164,10 @@ def main():
             apps = get_applications_for_company(user["username"])
             for app_id, student, job_id, approved, title in apps:
                 st.write(f"{student} applied to {title} — Status: {approved}")
+                if approved == "Pending" and st.button(f"Approve #{app_id}", key=f"approve_{app_id}"):
+                    approve_application(app_id)
+                    st.success(f"Application #{app_id} approved.")
+                    st.experimental_rerun()
 
         # Admin View
         elif user["role"] == "Admin":
@@ -176,7 +180,7 @@ def main():
                 if job:
                     st.write(f"{student} -> {job[0]} at {job[1]} | Status: {approved}")
                     if approved == "Pending":
-                        if st.button(f"Approve #{app_id}", key=f"app_{app_id}"):
+                        if st.button(f"Approve #{app_id}", key=f"approve_{app_id}"):
                             approve_application(app_id)
                             st.success(f"Application #{app_id} approved.")
                             st.experimental_rerun()
