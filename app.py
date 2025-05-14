@@ -1,61 +1,66 @@
 import streamlit as st
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-from urllib.parse import quote_plus
+import sqlite3
 from datetime import datetime
 
-# ------------- MongoDB Secure Connection ------------------
-# Encode credentials to handle special characters like @
-username = quote_plus("PHDCCI_Internship")
-password = quote_plus("Phd@123")  # '@' becomes '%40'
+# ----------- SQLite DB Setup --------------
+conn = sqlite3.connect('phdcci.db', check_same_thread=False)
+cursor = conn.cursor()
 
-# MongoDB URI (replace 'cluster0.ht97vch.mongodb.net' if needed)
-uri = f"mongodb+srv://{username}:{password}@cluster0.ht97vch.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+# ----------- Tables Initialization --------
+cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    password TEXT,
+    role TEXT
+)''')
 
-# Connect to MongoDB
-try:
-    client = MongoClient(uri, server_api=ServerApi('1'))
-    client.admin.command('ping')
-    db = client["phdcci"]
-    users_col = db["users"]
-    jobs_col = db["job_posts"]
-    apps_col = db["applications"]
-except Exception as e:
-    st.error("❌ MongoDB connection failed. Please check credentials or IP access.")
-    st.stop()
+cursor.execute('''CREATE TABLE IF NOT EXISTS job_posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT,
+    title TEXT,
+    description TEXT,
+    posted_at TEXT
+)''')
 
-# ------------- Utility Functions --------------------------
+cursor.execute('''CREATE TABLE IF NOT EXISTS applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student TEXT,
+    job_id INTEGER,
+    applied_at TEXT
+)''')
+conn.commit()
+
+# ---------- Utility Functions -------------
 def register_user(username, password, role):
-    if users_col.find_one({"username": username}):
+    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+    if cursor.fetchone():
         return False, "Username already exists."
-    users_col.insert_one({"username": username, "password": password, "role": role})
+    cursor.execute("INSERT INTO users VALUES (?, ?, ?)", (username, password, role))
+    conn.commit()
     return True, "Registration successful."
 
 def authenticate_user(username, password):
-    return users_col.find_one({"username": username, "password": password})
+    cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
+    return cursor.fetchone()
 
 def post_job(company, title, description):
-    jobs_col.insert_one({
-        "company": company,
-        "title": title,
-        "description": description,
-        "posted_at": datetime.now()
-    })
+    cursor.execute("INSERT INTO job_posts (company, title, description, posted_at) VALUES (?, ?, ?, ?)",
+                   (company, title, description, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
 
 def get_all_jobs():
-    return list(jobs_col.find())
+    cursor.execute("SELECT * FROM job_posts")
+    return cursor.fetchall()
 
 def apply_to_job(student, job_id):
-    apps_col.insert_one({
-        "student": student,
-        "job_id": job_id,
-        "applied_at": datetime.now()
-    })
+    cursor.execute("INSERT INTO applications (student, job_id, applied_at) VALUES (?, ?, ?)",
+                   (student, job_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
 
 def get_student_applications(student):
-    return list(apps_col.find({"student": student}))
+    cursor.execute("SELECT job_id, applied_at FROM applications WHERE student = ?", (student,))
+    return cursor.fetchall()
 
-# ------------- Streamlit App --------------------------
+# ------------- Streamlit UI ---------------
 def main():
     st.set_page_config("Internship & Placement Portal", layout="wide")
     st.title("🎓 Internship & Placement Portal")
@@ -64,7 +69,7 @@ def main():
     choice = st.sidebar.selectbox("Menu", menu)
 
     if choice == "Register":
-        st.subheader("Create a New Account")
+        st.subheader("Create Account")
         new_user = st.text_input("Username")
         new_pass = st.text_input("Password", type="password")
         role = st.selectbox("Role", ["Student", "Company", "Admin"])
@@ -79,65 +84,71 @@ def main():
         if st.button("Login"):
             user = authenticate_user(username, password)
             if user:
-                st.session_state.user = user
-                st.success(f"Welcome, {user['username']} ({user['role']})")
+                st.session_state.user = {
+                    "username": user[0],
+                    "role": user[2]
+                }
+                st.success(f"Welcome {user[0]} ({user[2]})")
             else:
-                st.error("Invalid username or password.")
+                st.error("Invalid login credentials.")
 
-    # ----------- Dashboard After Login ------------
+    # ---- Dashboard ----
     if "user" in st.session_state:
         user = st.session_state.user
-        role = user["role"]
+        st.header(f"{user['role']} Dashboard")
 
         if st.button("Logout"):
             del st.session_state.user
             st.experimental_rerun()
 
-        st.header(f"{role} Dashboard")
-
-        if role == "Student":
-            st.subheader("Available Jobs")
+        if user["role"] == "Student":
+            st.subheader("Browse Jobs")
             jobs = get_all_jobs()
             for job in jobs:
-                with st.expander(f"{job['title']} at {job['company']}"):
-                    st.write(job["description"])
-                    if st.button(f"Apply for {job['title']}", key=str(job["_id"])):
-                        apply_to_job(user["username"], job["_id"])
-                        st.success("Applied successfully!")
+                st.markdown(f"**{job[2]}** at *{job[1]}*")
+                st.write(job[3])
+                if st.button(f"Apply to {job[2]}", key=f"apply_{job[0]}"):
+                    apply_to_job(user["username"], job[0])
+                    st.success("Applied successfully!")
 
             st.subheader("Your Applications")
-            apps = get_student_applications(user["username"])
-            for app in apps:
-                job = jobs_col.find_one({"_id": app["job_id"]})
-                st.write(f"- {job['title']} at {job['company']} (Applied on {app['applied_at'].strftime('%Y-%m-%d')})")
+            for job_id, applied_at in get_student_applications(user["username"]):
+                cursor.execute("SELECT title, company FROM job_posts WHERE id = ?", (job_id,))
+                job = cursor.fetchone()
+                if job:
+                    st.write(f"✔ Applied to **{job[0]}** at *{job[1]}* on {applied_at}")
 
-        elif role == "Company":
+        elif user["role"] == "Company":
             st.subheader("Post a Job")
             title = st.text_input("Job Title")
-            desc = st.text_area("Job Description")
+            description = st.text_area("Job Description")
             if st.button("Post Job"):
-                post_job(user["username"], title, desc)
-                st.success("Job posted successfully.")
+                post_job(user["username"], title, description)
+                st.success("Job posted.")
 
             st.subheader("Your Posted Jobs")
-            posted_jobs = jobs_col.find({"company": user["username"]})
-            for job in posted_jobs:
-                st.write(f"- {job['title']} — {job['description']}")
+            cursor.execute("SELECT title, description FROM job_posts WHERE company = ?", (user["username"],))
+            jobs = cursor.fetchall()
+            for j in jobs:
+                st.write(f"- {j[0]} — {j[1]}")
 
-        elif role == "Admin":
+        elif user["role"] == "Admin":
             st.subheader("All Users")
-            for u in users_col.find():
-                st.write(f"- {u['username']} ({u['role']})")
+            cursor.execute("SELECT * FROM users")
+            for u in cursor.fetchall():
+                st.write(f"- {u[0]} ({u[2]})")
 
-            st.subheader("All Jobs")
+            st.subheader("All Job Posts")
             for job in get_all_jobs():
-                st.write(f"- {job['title']} at {job['company']}")
+                st.write(f"- {job[2]} at {job[1]}")
 
             st.subheader("All Applications")
-            for app in apps_col.find():
-                job = jobs_col.find_one({"_id": app["job_id"]})
+            cursor.execute("SELECT student, job_id FROM applications")
+            for a in cursor.fetchall():
+                cursor.execute("SELECT title, company FROM job_posts WHERE id = ?", (a[1],))
+                job = cursor.fetchone()
                 if job:
-                    st.write(f"{app['student']} applied to {job['title']} at {job['company']}")
+                    st.write(f"{a[0]} applied to {job[0]} at {job[1]}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
