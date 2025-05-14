@@ -1,16 +1,24 @@
 import streamlit as st
 from pymongo import MongoClient
+from pymongo.server_api import ServerApi
 from urllib.parse import quote_plus
 from datetime import datetime
 
-# --------- MongoDB Setup ---------
-user = quote_plus(st.secrets["MONGO_USER"])
-password = quote_plus(st.secrets["MONGO_PASS"])
-cluster = st.secrets["MONGO_CLUSTER"]
-db_name = st.secrets["MONGO_DB"]
+# --------- MongoDB Setup (Safe URI) ---------
+username = quote_plus("PHDCCI_Internship")
+password = quote_plus("Phd@123")  # Special characters safely encoded
 
-client = MongoClient(f"mongodb+srv://{user}:{password}@{cluster}/{db_name}?retryWrites=true&w=majority")
-db = client[db_name]
+uri = f"mongodb+srv://{username}:{password}@cluster0.ht97vch.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
+# Connect to MongoDB
+client = MongoClient(uri, server_api=ServerApi('1'))
+try:
+    client.admin.command('ping')
+except Exception as e:
+    st.error("❌ MongoDB connection failed.")
+    st.stop()
+
+db = client["phdcci"]
 users_col = db["users"]
 jobs_col = db["job_posts"]
 apps_col = db["applications"]
